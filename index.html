@@ -1,0 +1,627 @@
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Play, Pause, RotateCcw, Zap, Beaker, Info, Lightbulb, ArrowLeftRight, Check, X, FileText, HelpCircle, Droplet, FlaskConical } from 'lucide-react';
+
+export default function App() {
+  // --- 상태 관리 ---
+  const [activeMainTab, setActiveMainTab] = useState('lab'); // 'lab', 'explain', 'quiz'
+  
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [voltage, setVoltage] = useState(50);
+  const [sample, setSample] = useState('CuSO4'); 
+  const [electrolyte, setElectrolyte] = useState('KNO3'); 
+  const [isSwapped, setIsSwapped] = useState(false); 
+  const [showWelcome, setShowWelcome] = useState(true); 
+  
+  const [quizAnswers, setQuizAnswers] = useState({ q1: '', q2: '', q3: '' });
+  const [quizResults, setQuizResults] = useState({ q1: null, q2: null, q3: null });
+
+  const canvasRef = useRef(null);
+  const particlesRef = useRef([]);
+  const animationRef = useRef(null);
+  
+  const dropAnimRef = useRef({ active: false, drops: [] });
+
+  // 캔버스 크기를 크게 확대
+  const CANVAS_WIDTH = 900;
+  const CANVAS_HEIGHT = 450;
+
+  // --- 폰트 로드 ---
+  useEffect(() => {
+    const link = document.createElement('link');
+    link.href = 'https://fonts.googleapis.com/css2?family=Jua&display=swap';
+    link.rel = 'stylesheet';
+    document.head.appendChild(link);
+  }, []);
+
+  // --- 효과음 ---
+  const playSound = useCallback((type) => {
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContext) return;
+    const ctx = new AudioContext();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+
+    const now = ctx.currentTime;
+    
+    if (type === 'play') {
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(300, now);
+      osc.frequency.exponentialRampToValueAtTime(800, now + 0.3);
+      gain.gain.setValueAtTime(0.5, now);
+      gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
+      osc.start(now);
+      osc.stop(now + 0.3);
+    } else if (type === 'pause') {
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(600, now);
+      osc.frequency.exponentialRampToValueAtTime(200, now + 0.3);
+      gain.gain.setValueAtTime(0.5, now);
+      gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
+      osc.start(now);
+      osc.stop(now + 0.3);
+    } else if (type === 'reset') {
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(100, now);
+      osc.frequency.linearRampToValueAtTime(50, now + 0.2);
+      gain.gain.setValueAtTime(0.3, now);
+      gain.gain.linearRampToValueAtTime(0.01, now + 0.2);
+      osc.start(now);
+      osc.stop(now + 0.2);
+    } else if (type === 'pop') {
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(500, now);
+      osc.frequency.exponentialRampToValueAtTime(700, now + 0.1);
+      gain.gain.setValueAtTime(0.4, now);
+      gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
+      osc.start(now);
+      osc.stop(now + 0.1);
+    } else if (type === 'success') {
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(600, now);
+      osc.frequency.setValueAtTime(800, now + 0.1);
+      gain.gain.setValueAtTime(0.5, now);
+      gain.gain.linearRampToValueAtTime(0.01, now + 0.2);
+      osc.start(now);
+      osc.stop(now + 0.2);
+    } else if (type === 'fail') {
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(300, now);
+      osc.frequency.linearRampToValueAtTime(150, now + 0.2);
+      gain.gain.setValueAtTime(0.3, now);
+      gain.gain.linearRampToValueAtTime(0.01, now + 0.2);
+      osc.start(now);
+      osc.stop(now + 0.2);
+    }
+  }, []);
+
+  // 퀴즈 채점
+  const checkQuiz = (qNum) => {
+    const ans = quizAnswers[`q${qNum}`].replace(/\s+/g, '');
+    let isCorrect = false;
+    
+    if (qNum === 1) isCorrect = ans.includes('전기력') || ans.includes('정전기');
+    if (qNum === 2) isCorrect = ans.includes('반대') || ans.includes('바뀐다') || ans.includes('바뀜') || ans.includes('달라');
+    if (qNum === 3) isCorrect = ans.includes('전류') || ans.includes('전해질') || ans.includes('전기') || ans.includes('흐르') || ans.includes('통하');
+    
+    setQuizResults(prev => ({ ...prev, [`q${qNum}`]: isCorrect }));
+    playSound(isCorrect ? 'success' : 'fail');
+  };
+
+  // --- 입자 초기화 ---
+  const initParticles = useCallback(() => {
+    particlesRef.current = [];
+    dropAnimRef.current.active = false;
+  }, []);
+
+  // --- 용액 떨어뜨리기 애니메이션 ---
+  const handleDropSample = () => {
+    playSound('play');
+    particlesRef.current = []; // 기존 입자 제거
+    
+    dropAnimRef.current = {
+      active: true,
+      drops: sample === 'Both' ? [
+        { x: CANVAS_WIDTH/2 - 80, y: -30, color: '#3b82f6', type: 'CuSO4' },
+        { x: CANVAS_WIDTH/2 + 80, y: -30, color: '#a855f7', type: 'KMnO4' }
+      ] : [
+        { x: CANVAS_WIDTH/2, y: -30, color: sample === 'CuSO4' ? '#3b82f6' : '#a855f7', type: sample }
+      ]
+    };
+  };
+
+  useEffect(() => {
+    setIsPlaying(false);
+    initParticles();
+  }, [initParticles]);
+
+  // --- 애니메이션 루프 ---
+  useEffect(() => {
+    if (activeMainTab !== 'lab') return; // 실험실 탭이 아닐 때는 캔버스 렌더링 중지
+
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+
+    // 입자 생성 함수
+    const spawnSample = (type1, color1, charge1, type2, color2, charge2, offsetX = 0) => {
+      for (let i = 0; i < 12; i++) {
+        // 처음 생성 시 겹침을 최소화하기 위해 퍼지는 반경을 넓게 설정 (60 -> 100)
+        const cx = CANVAS_WIDTH / 2 + offsetX + (Math.random() - 0.5) * 100;
+        const cy = CANVAS_HEIGHT / 2 + (Math.random() - 0.5) * 100;
+        
+        const isType1Visible = type1 !== 'K⁺' && type1 !== 'SO₄²⁻';
+        const isType2Visible = type2 !== 'K⁺' && type2 !== 'SO₄²⁻';
+
+        // 반경(radius)을 18로 대폭 키움
+        if (isType1Visible) particlesRef.current.push({ id: `s1_${Date.now()}_${i}`, x: cx, y: cy, charge: charge1, label: type1, color: color1, radius: 20 });
+        if (isType2Visible) particlesRef.current.push({ id: `s2_${Date.now()}_${i}`, x: cx, y: cy, charge: charge2, label: type2, color: color2, radius: 20 });
+      }
+    };
+
+    const render = () => {
+      ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+      const isMoving = isPlaying && electrolyte !== 'None';
+      const direction = isSwapped ? -1 : 1; 
+
+      // 1. 거름종이 배경 (전기가 흐르면 색이 변하고 깜빡이는 효과)
+      if (electrolyte === 'None') {
+        ctx.fillStyle = '#f3f4f6';
+      } else if (isMoving) {
+        // 전류가 흐를 때 은은한 노란빛으로 깜빡임
+        const pulse = Math.sin(Date.now() / 150) * 10;
+        ctx.fillStyle = `rgb(255, ${248 + pulse}, ${220 + pulse})`; 
+      } else {
+        ctx.fillStyle = '#eef2ff'; 
+      }
+      
+      ctx.fillRect(60, 30, CANVAS_WIDTH - 120, CANVAS_HEIGHT - 60);
+      ctx.strokeStyle = isMoving ? '#facc15' : '#d1d5db'; // 테두리도 전기가 흐르면 노랗게
+      ctx.lineWidth = 3;
+      ctx.strokeRect(60, 30, CANVAS_WIDTH - 120, CANVAS_HEIGHT - 60);
+
+      // 1-1. 전기장 시각화 (배경에 흐르는 점선 추가)
+      if (isMoving) {
+        ctx.save();
+        ctx.strokeStyle = 'rgba(234, 179, 8, 0.4)'; // 노란색 반투명 선
+        ctx.lineWidth = 2;
+        ctx.setLineDash([15, 15]);
+        // 이동 방향에 맞춰 점선이 흐르도록 설정
+        let dashOffset = (Date.now() / 30) % 30;
+        ctx.lineDashOffset = isSwapped ? dashOffset : -dashOffset; 
+        
+        for(let y = 70; y < CANVAS_HEIGHT - 50; y += 40) {
+           ctx.beginPath();
+           ctx.moveTo(80, y);
+           ctx.lineTo(CANVAS_WIDTH - 80, y);
+           ctx.stroke();
+        }
+        ctx.restore();
+
+        // 1-2. 전류 흐름 알림 텍스트
+        ctx.save();
+        ctx.globalAlpha = 0.6 + 0.4 * Math.sin(Date.now() / 150);
+        ctx.fillStyle = '#ea580c'; // 짙은 오렌지색
+        ctx.font = 'bold 26px "Jua", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('⚡ 찌릿찌릿! 전류가 흐르고 있어요!', CANVAS_WIDTH / 2, CANVAS_HEIGHT - 45);
+        ctx.restore();
+      }
+
+      // 도선(전선)
+      ctx.strokeStyle = '#4b5563'; 
+      ctx.lineWidth = 6;
+      ctx.beginPath(); ctx.moveTo(35, 0); ctx.lineTo(35, 30); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(CANVAS_WIDTH - 35, 0); ctx.lineTo(CANVAS_WIDTH - 35, 30); ctx.stroke();
+
+      const leftColor = isSwapped ? '#1f2937' : '#ef4444'; 
+      const rightColor = isSwapped ? '#ef4444' : '#1f2937';
+      const leftSymbol = isSwapped ? '-' : '+';
+      const rightSymbol = isSwapped ? '+' : '-';
+
+      // 왼쪽 극
+      ctx.fillStyle = leftColor;
+      ctx.fillRect(15, 30, 40, CANVAS_HEIGHT - 60);
+      ctx.fillStyle = 'white';
+      ctx.font = 'bold 28px "Jua", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(leftSymbol, 35, CANVAS_HEIGHT / 2);
+
+      // 오른쪽 극
+      ctx.fillStyle = rightColor;
+      ctx.fillRect(CANVAS_WIDTH - 55, 30, 40, CANVAS_HEIGHT - 60);
+      ctx.fillStyle = 'white';
+      ctx.fillText(rightSymbol, CANVAS_WIDTH - 35, CANVAS_HEIGHT / 2);
+
+      const speedMultiplier = (voltage / 50) * 1.2; 
+
+      // 2. 이온 입자 이동 로직
+      particlesRef.current.forEach(p => {
+        if (isMoving) {
+          p.x += p.charge * speedMultiplier * direction;
+          p.x += (Math.random() - 0.5) * 1.5; // 브라운 운동
+          p.y += (Math.random() - 0.5) * 1.5;
+        }
+      });
+
+      // 3. 입자 간 충돌(겹침) 방지 로직 
+      for (let i = 0; i < particlesRef.current.length; i++) {
+        for (let j = i + 1; j < particlesRef.current.length; j++) {
+          let p1 = particlesRef.current[i];
+          let p2 = particlesRef.current[j];
+          let dx = p2.x - p1.x;
+          let dy = p2.y - p1.y;
+          let dist = Math.sqrt(dx * dx + dy * dy);
+          let minDist = p1.radius + p2.radius + 4; // 서로 닿지 않도록 4px 여유 간격
+          
+          if (dist > 0 && dist < minDist) {
+            let overlap = minDist - dist;
+            let nx = dx / dist;
+            let ny = dy / dist;
+            
+            // 겹친 만큼 서로 반대 방향으로 밀어냄
+            p1.x -= nx * overlap / 2;
+            p1.y -= ny * overlap / 2;
+            p2.x += nx * overlap / 2;
+            p2.y += ny * overlap / 2;
+          }
+        }
+      }
+
+      // 4. 경계 처리 및 렌더링
+      particlesRef.current.forEach(p => {
+        // 화면 밖으로 나가지 않도록 경계 고정
+        p.x = Math.max(65 + p.radius, Math.min(CANVAS_WIDTH - 65 - p.radius, p.x));
+        p.y = Math.max(35 + p.radius, Math.min(CANVAS_HEIGHT - 35 - p.radius, p.y));
+
+        // 입자(구슬) 그리기
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+        ctx.fillStyle = p.color;
+        ctx.fill();
+        
+        // 입자 테두리 추가 (입체감)
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.15)';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        // 입자 내부 글자 (이온식)
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '16px "Jua", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(p.label, p.x, p.y + 1); // 가운데 정렬
+      });
+
+      // 5. 용액 물방울 떨어지는 애니메이션 렌더링
+      if (dropAnimRef.current.active) {
+        let allDone = true;
+        dropAnimRef.current.drops.forEach(drop => {
+            drop.y += 10; 
+            
+            ctx.beginPath();
+            ctx.arc(drop.x, drop.y, 15, 0, Math.PI);
+            ctx.moveTo(drop.x - 15, drop.y);
+            ctx.lineTo(drop.x, drop.y - 25);
+            ctx.lineTo(drop.x + 15, drop.y);
+            ctx.fillStyle = drop.color;
+            ctx.fill();
+
+            if (drop.y < CANVAS_HEIGHT / 2) {
+                allDone = false;
+            }
+        });
+
+        if (allDone) {
+            dropAnimRef.current.active = false;
+            playSound('pop');
+            
+            dropAnimRef.current.drops.forEach(drop => {
+                const offsetX = drop.x - CANVAS_WIDTH / 2;
+                if (drop.type === 'CuSO4') {
+                    spawnSample('Cu²⁺', '#3b82f6', 1, 'SO₄²⁻', '#9ca3af', -1, offsetX);
+                } else if (drop.type === 'KMnO4') {
+                    spawnSample('K⁺', '#9ca3af', 1, 'MnO₄⁻', '#a855f7', -1, offsetX);
+                }
+            });
+        }
+      }
+
+      animationRef.current = requestAnimationFrame(render);
+    };
+
+    render();
+    return () => { if (animationRef.current) cancelAnimationFrame(animationRef.current); };
+  }, [isPlaying, voltage, electrolyte, isSwapped, activeMainTab, playSound]);
+
+  return (
+    <div className="flex flex-col h-screen bg-gray-50 text-gray-800 overflow-hidden" style={{ fontFamily: "'Jua', sans-serif" }}>
+      
+      {/* --- 실험 목표 모달 --- */}
+      {showWelcome && (
+        <div className="fixed inset-0 bg-black/60 z-[100] flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl p-8 max-w-lg w-full shadow-2xl text-center transform transition-all">
+            <h2 className="text-4xl text-blue-600 mb-6 flex items-center justify-center gap-2">
+              <Zap className="text-yellow-400" /> 실험 목표
+            </h2>
+            <p className="text-2xl text-gray-700 leading-relaxed mb-8">
+              전기력을 이용하여 이온의 이동을 확인하고,<br/>이온이 전하를 띠고 있음을 설명할 수 있다.
+            </p>
+            <button 
+              onClick={() => { playSound('pop'); setShowWelcome(false); }}
+              className="w-full py-4 bg-blue-500 hover:bg-blue-600 text-white text-2xl rounded-2xl shadow-md transition-colors"
+            >
+              실험 시작하기!
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* --- 최상단 탭 네비게이션 --- */}
+      <header className="bg-white shadow-sm z-20 flex-shrink-0 px-6 py-4 flex items-center justify-between border-b border-gray-200">
+        <div className="flex items-center gap-2">
+          <Zap className="text-yellow-400 w-8 h-8" fill="currentColor" />
+          <h1 className="text-3xl text-blue-600 m-0">이온의 여행</h1>
+        </div>
+        
+        <div className="flex gap-2 bg-gray-100 p-1 rounded-2xl">
+          <button 
+            onClick={() => { playSound('pop'); setActiveMainTab('lab'); }} 
+            className={`px-6 py-3 rounded-xl text-xl flex items-center gap-2 transition-all ${activeMainTab === 'lab' ? 'bg-white text-blue-600 shadow-md font-bold' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-200'}`}
+          >
+            <FlaskConical size={24}/> 실험실
+          </button>
+          <button 
+            onClick={() => { playSound('pop'); setActiveMainTab('explain'); }} 
+            className={`px-6 py-3 rounded-xl text-xl flex items-center gap-2 transition-all ${activeMainTab === 'explain' ? 'bg-white text-blue-600 shadow-md font-bold' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-200'}`}
+          >
+            <FileText size={24}/> 원리 설명
+          </button>
+          <button 
+            onClick={() => { playSound('pop'); setActiveMainTab('quiz'); }} 
+            className={`px-6 py-3 rounded-xl text-xl flex items-center gap-2 transition-all ${activeMainTab === 'quiz' ? 'bg-white text-purple-600 shadow-md font-bold' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-200'}`}
+          >
+            <HelpCircle size={24}/> 확인 퀴즈
+          </button>
+        </div>
+        <div className="text-gray-400 text-lg hidden md:block">제작: 과학이 조선생</div>
+      </header>
+
+      {/* --- 메인 콘텐츠 영역 --- */}
+      <main className="flex-1 overflow-hidden relative">
+        
+        {/* 1. 실험실 탭 (제어 패널 + 대형 시뮬레이션) */}
+        {activeMainTab === 'lab' && (
+          <div className="h-full flex animate-in fade-in duration-300">
+            {/* 좌측 제어 패널 */}
+            <div className="w-[340px] h-full bg-white shadow-xl flex-shrink-0 flex flex-col z-10 border-r border-gray-200 overflow-y-auto">
+              <div className="p-6 flex flex-col gap-5">
+                <div className="bg-blue-50 p-4 rounded-xl border border-blue-100">
+                  <h2 className="text-lg text-blue-800 mb-3 flex items-center gap-2">
+                    <Zap size={18}/> 전원 제어
+                  </h2>
+                  <div className="flex gap-2">
+                    <button 
+                      onClick={() => { playSound(isPlaying ? 'pause' : 'play'); setIsPlaying(!isPlaying); }}
+                      className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl text-lg text-white transition-colors shadow-sm ${isPlaying ? 'bg-red-400 hover:bg-red-500' : 'bg-blue-500 hover:bg-blue-600'}`}
+                    >
+                      {isPlaying ? <><Pause size={20}/> 정지!</> : <><Play size={20}/> 켜기!</>}
+                    </button>
+                    <button 
+                      onClick={() => { playSound('reset'); initParticles(); }}
+                      className="px-4 py-3 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-xl transition-colors shadow-sm"
+                      title="초기화"
+                    >
+                      <RotateCcw size={20} />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-lg text-gray-700 flex items-center gap-2">
+                    <Beaker size={18}/> 떨어뜨릴 시료 (이온)
+                  </label>
+                  <select 
+                    value={sample} 
+                    onChange={(e) => { playSound('pop'); setSample(e.target.value); }}
+                    className="w-full p-3 border-2 border-gray-200 rounded-xl focus:border-blue-400 outline-none text-base"
+                  >
+                    <option value="CuSO4">황산 구리(II) 수용액 (파랑)</option>
+                    <option value="KMnO4">과망가니즈산 칼륨 수용액 (보라)</option>
+                    <option value="Both">두 용액 모두 떨어뜨리기</option>
+                  </select>
+                  <button
+                    onClick={handleDropSample}
+                    className="w-full bg-indigo-100 text-indigo-700 font-bold py-3 rounded-xl mt-1 border-2 border-indigo-200 hover:bg-indigo-200 transition-colors shadow-sm flex justify-center items-center gap-2 text-lg"
+                  >
+                    <Droplet size={20}/> 가운데에 소량 떨어뜨리기
+                  </button>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-lg text-gray-700">전해질 (거름종이 적심)</label>
+                  <select 
+                    value={electrolyte} 
+                    onChange={(e) => { playSound('pop'); setElectrolyte(e.target.value); }}
+                    className="w-full p-3 border-2 border-gray-200 rounded-xl focus:border-blue-400 outline-none text-base"
+                  >
+                    <option value="KNO3">질산 칼륨 (KNO₃) 수용액</option>
+                    <option value="NaCl">염화 나트륨 (NaCl) 수용액</option>
+                    <option value="None">전해질 없음 (순수한 물)</option>
+                  </select>
+                </div>
+
+                <div className="space-y-2 pt-2">
+                  <div className="flex justify-between items-center">
+                    <label className="text-lg text-gray-700">전압 세기</label>
+                    <span className="text-blue-600 bg-blue-100 px-3 py-1 rounded-full">{voltage} V</span>
+                  </div>
+                  <input 
+                    type="range" min="0" max="100" value={voltage} 
+                    onChange={(e) => setVoltage(e.target.value)}
+                    onMouseUp={() => playSound('pop')}
+                    onTouchEnd={() => playSound('pop')}
+                    className="w-full h-3 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                  />
+                </div>
+                
+                <div className="pt-2 border-t border-gray-200 space-y-2">
+                  <button
+                    onClick={() => { playSound('pop'); setIsSwapped(!isSwapped); }}
+                    className="w-full flex items-center justify-center gap-2 py-3 rounded-xl border-2 border-gray-200 text-gray-700 bg-white hover:bg-gray-50 shadow-sm transition-all text-lg"
+                  >
+                    <ArrowLeftRight size={20} />
+                    (+)극 (-)극 위치 바꾸기
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* 우측 대형 시뮬레이션 캔버스 */}
+            <div className="flex-1 flex flex-col items-center justify-center p-8 relative bg-gray-100 min-w-0 h-full">
+              {isPlaying && electrolyte === 'None' && (
+                <div className="absolute top-10 bg-red-100 text-red-600 px-8 py-4 rounded-full shadow-lg animate-bounce flex items-center gap-3 text-2xl z-10 border border-red-200">
+                  <Info size={32}/> 앗! 전해질이 없어서 전기가 통하지 않아요!
+                </div>
+              )}
+              
+              <div className="bg-white p-8 rounded-3xl shadow-2xl w-full max-w-5xl flex flex-col items-center border border-gray-200">
+                {/* 캔버스가 이제 훨씬 크고 선명하게 보입니다 */}
+                <canvas 
+                  ref={canvasRef} 
+                  width={CANVAS_WIDTH} 
+                  height={CANVAS_HEIGHT}
+                  className="rounded-2xl bg-gray-50 border-2 border-gray-100 w-full object-contain"
+                  style={{ maxHeight: 'calc(100vh - 250px)' }}
+                />
+                <div className="flex w-full justify-between mt-8 text-2xl px-6">
+                  <span className={`px-6 py-3 rounded-full shadow-md font-bold border ${isSwapped ? 'text-gray-700 bg-gray-200 border-gray-300' : 'text-red-600 bg-red-50 border-red-200'}`}>
+                    {isSwapped ? '(-)극' : '(+)극'}
+                  </span>
+                  <span className={`px-6 py-3 rounded-full shadow-md font-bold border ${isSwapped ? 'text-red-600 bg-red-50 border-red-200' : 'text-gray-700 bg-gray-200 border-gray-300'}`}>
+                    {isSwapped ? '(+)극' : '(-)극'}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 2. 원리 설명 탭 */}
+        {activeMainTab === 'explain' && (
+          <div className="h-full w-full bg-white overflow-y-auto p-10 animate-in fade-in duration-300 flex justify-center">
+            <div className="max-w-4xl w-full flex flex-col gap-10">
+              
+              <div className="text-center">
+                <h2 className="text-4xl text-blue-700 mb-4 border-b-4 border-blue-200 inline-block pb-2">📖 전기장과 이온의 이동 원리</h2>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                <div className="bg-blue-50 p-8 rounded-3xl border border-blue-100 shadow-sm">
+                  <h3 className="text-3xl text-blue-600 mb-4 flex items-center gap-2"><Zap/> 전기력 이란?</h3>
+                  <p className="text-gray-700 text-2xl leading-relaxed">
+                    <strong>전기력 : 전하를 띤 입자에 작용하는 힘</strong><br/><br/>
+                    서로 <strong>다른 전하</strong>끼리는 자석처럼 찰싹! 끌어당겨요.<br/>
+                    (+)전하를 띤 양이온은 (-)극으로 달려가고,<br/>
+                    (-)전하를 띤 음이온은 (+)극으로 달려간답니다.
+                  </p>
+                </div>
+
+                <div className="bg-purple-50 p-8 rounded-3xl border border-purple-100 shadow-sm">
+                  <h3 className="text-3xl text-purple-600 mb-4 flex items-center gap-2"><Info/> 관찰 포인트!</h3>
+                  <div className="text-gray-700 space-y-6 text-2xl leading-relaxed">
+                    <div className="flex items-start gap-4 bg-white p-4 rounded-2xl shadow-sm">
+                      <div className="w-10 h-10 rounded-full bg-blue-500 mt-1 shrink-0 flex items-center justify-center text-white text-lg">Cu</div>
+                      <p>파란색 <strong>Cu²⁺</strong>(구리 이온)은 양이온이라서 항상 <strong>(-)극</strong>으로 가요!</p>
+                    </div>
+                    <div className="flex items-start gap-4 bg-white p-4 rounded-2xl shadow-sm">
+                      <div className="w-10 h-10 rounded-full bg-purple-500 mt-1 shrink-0 flex items-center justify-center text-white text-lg">Mn</div>
+                      <p>보라색 <strong>MnO₄⁻</strong>(과망가니즈산 이온)은 음이온이라서 항상 <strong>(+)극</strong>으로 가요!</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-orange-50 p-8 rounded-3xl border border-orange-200 relative shadow-md mt-6">
+                <div className="absolute -top-5 -left-4 bg-orange-400 text-white px-6 py-2 rounded-full text-2xl shadow-lg flex items-center gap-2">
+                  <Lightbulb size={24} /> 조선생의 꿀팁
+                </div>
+                <p className="text-gray-800 mt-6 text-2xl leading-relaxed">
+                  <strong>전해질 수용액을 쓰는 이유?</strong><br/>
+                  거름종이를 그냥 순수한 물에 적시면 전기가 안 통하지만, <strong>전해질</strong>(KNO₃ 등)을 녹이면 전류가 흐르는 튼튼한 다리가 생겨서 시료 이온들이 씽씽 이동할 수 있어요!
+                </p>
+              </div>
+
+            </div>
+          </div>
+        )}
+
+        {/* 3. 확인 퀴즈 탭 */}
+        {activeMainTab === 'quiz' && (
+          <div className="h-full w-full bg-gray-50 overflow-y-auto p-10 animate-in fade-in duration-300 flex justify-center">
+            <div className="max-w-4xl w-full flex flex-col gap-8">
+              
+              <div className="text-center mb-4">
+                <h2 className="text-4xl text-purple-700 mb-4 border-b-4 border-purple-200 inline-block pb-2">✍️ 실험 확인 퀴즈</h2>
+                <p className="text-gray-600 text-2xl mt-2">💡 시뮬레이션을 충분히 관찰한 후, 핵심 키워드를 포함하여 정답을 적어보세요!</p>
+              </div>
+
+              {/* 퀴즈 1 */}
+              <div className="bg-white p-8 rounded-3xl border-2 border-gray-200 shadow-md hover:border-purple-300 transition-colors">
+                <p className="font-bold text-gray-800 mb-4 text-2xl leading-snug">Q1. 이온의 이동이 일어나는 주된 원인으로 작용하는 힘은 무엇인가요?</p>
+                <textarea 
+                  rows={2}
+                  value={quizAnswers.q1} onChange={(e) => setQuizAnswers({...quizAnswers, q1: e.target.value})}
+                  className="w-full p-4 border-2 border-gray-200 rounded-2xl mb-4 outline-none focus:border-purple-400 text-2xl resize-none bg-gray-50"
+                  placeholder="예: OOO 때문입니다."
+                />
+                <div className="flex items-center justify-between">
+                  <button onClick={() => checkQuiz(1)} className="bg-purple-100 text-purple-700 px-8 py-3 rounded-2xl font-bold hover:bg-purple-200 transition-colors text-2xl shadow-sm">정답 확인</button>
+                  {quizResults.q1 === true && <span className="text-green-500 font-bold flex items-center gap-2 text-2xl"><Check size={32}/> 정답!</span>}
+                  {quizResults.q1 === false && <span className="text-red-500 font-bold flex items-center gap-2 text-2xl"><X size={32}/> 다시 생각해보세요</span>}
+                </div>
+              </div>
+
+              {/* 퀴즈 2 */}
+              <div className="bg-white p-8 rounded-3xl border-2 border-gray-200 shadow-md hover:border-purple-300 transition-colors">
+                <p className="font-bold text-gray-800 mb-4 text-2xl leading-snug">Q2. (+)극과 (-)극의 위치를 서로 바꿔주면 이온이 이동하는 방향은 어떻게 될까요?</p>
+                <textarea 
+                  rows={2}
+                  value={quizAnswers.q2} onChange={(e) => setQuizAnswers({...quizAnswers, q2: e.target.value})}
+                  className="w-full p-4 border-2 border-gray-200 rounded-2xl mb-4 outline-none focus:border-purple-400 text-2xl resize-none bg-gray-50"
+                  placeholder="예: 방향이 OOO"
+                />
+                <div className="flex items-center justify-between">
+                  <button onClick={() => checkQuiz(2)} className="bg-purple-100 text-purple-700 px-8 py-3 rounded-2xl font-bold hover:bg-purple-200 transition-colors text-2xl shadow-sm">정답 확인</button>
+                  {quizResults.q2 === true && <span className="text-green-500 font-bold flex items-center gap-2 text-2xl"><Check size={32}/> 정답!</span>}
+                  {quizResults.q2 === false && <span className="text-red-500 font-bold flex items-center gap-2 text-2xl"><X size={32}/> 다시 생각해보세요</span>}
+                </div>
+              </div>
+
+              {/* 퀴즈 3 */}
+              <div className="bg-white p-8 rounded-3xl border-2 border-gray-200 shadow-md hover:border-purple-300 transition-colors">
+                <p className="font-bold text-gray-800 mb-4 text-2xl leading-snug">Q3. 순수한 물 대신 질산 칼륨 같은 전해질 수용액을 부어 주는 이유는 무엇일까요?</p>
+                <textarea 
+                  rows={2}
+                  value={quizAnswers.q3} onChange={(e) => setQuizAnswers({...quizAnswers, q3: e.target.value})}
+                  className="w-full p-4 border-2 border-gray-200 rounded-2xl mb-4 outline-none focus:border-purple-400 text-2xl resize-none bg-gray-50"
+                  placeholder="예: OO가 잘 OO게 하기 위해서"
+                />
+                <div className="flex items-center justify-between">
+                  <button onClick={() => checkQuiz(3)} className="bg-purple-100 text-purple-700 px-8 py-3 rounded-2xl font-bold hover:bg-purple-200 transition-colors text-2xl shadow-sm">정답 확인</button>
+                  {quizResults.q3 === true && <span className="text-green-500 font-bold flex items-center gap-2 text-2xl"><Check size={32}/> 정답!</span>}
+                  {quizResults.q3 === false && <span className="text-red-500 font-bold flex items-center gap-2 text-2xl"><X size={32}/> 다시 생각해보세요</span>}
+                </div>
+              </div>
+
+            </div>
+          </div>
+        )}
+
+      </main>
+    </div>
+  );
+}
